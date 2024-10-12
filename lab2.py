@@ -1,91 +1,98 @@
-import pygame
-from pygame.locals import *
-from OpenGL.GL import *
-from OpenGL.GLU import *
+import ctypes
+import numpy as np
 import math
+from PIL import Image
 
-# Визначення розмірів вікна
-WINDOW_WIDTH = 800
-WINDOW_HEIGHT = 600
+width, height = 1024, 1024
+buffer = np.zeros((width * height * 4,), dtype=np.uint8)
 
-# Перетворення декартових координат у циліндричні
-def cartesian_to_cylindrical(x, y, z):
+osmesa = ctypes.CDLL("libOSMesa.so")
+
+OSMESA_RGBA = 0x1908
+GL_UNSIGNED_BYTE = 0x1401
+
+OSMesaCreateContext = osmesa.OSMesaCreateContext
+OSMesaCreateContext.restype = ctypes.c_void_p
+OSMesaCreateContext.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+
+OSMesaMakeCurrent = osmesa.OSMesaMakeCurrent
+OSMesaMakeCurrent.restype = ctypes.c_int
+OSMesaMakeCurrent.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ubyte), ctypes.c_uint, ctypes.c_int, ctypes.c_int]
+
+context = OSMesaCreateContext(OSMESA_RGBA, None)
+if not OSMesaMakeCurrent(context, buffer.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte)), GL_UNSIGNED_BYTE, width, height):
+    raise RuntimeError("OSMesa context creation failed!")
+
+def draw_pixel(x, y):
+    if 0 <= x < width and 0 <= y < height:
+        buffer[4 * (y * width + x): 4 * (y * width + x) + 3] = [255, 255, 255]  # RGB (white)
+        buffer[4 * (y * width + x) + 3] = 255  # Alpha channel (opaque)
+
+def midpoint_circle_algorithm(center_x, center_y, radius):
+    x = radius
+    y = 0
+    err = 0
+
+    while x >= y:
+        draw_pixel(center_x + x, center_y + y)
+        draw_pixel(center_x + y, center_y + x)
+        draw_pixel(center_x - y, center_y + x)
+        draw_pixel(center_x - x, center_y + y)
+        draw_pixel(center_x - x, center_y - y)
+        draw_pixel(center_x - y, center_y - x)
+        draw_pixel(center_x + y, center_y - x)
+        draw_pixel(center_x + x, center_y - y)
+
+        y += 1
+        if err <= 0:
+            err += 2 * y + 1
+        if err > 0:
+            x -= 1
+            err -= 2 * x + 1
+
+def draw_axes():
+    # Draw x-axis (horizontal axis along the bottom)
+    for x in range(width):
+        draw_pixel(x, height - 1)
+
+    # Draw y-axis (vertical axis along the right side)
+    for y in range(height):
+        draw_pixel(width - 1, y)
+
+def cartesian_to_cylindrical(x, y):
     r = math.sqrt(x**2 + y**2)
     theta = math.atan2(y, x)
-    return r, theta, z
+    return r, theta
 
-# Малюємо осі координат
-def draw_axes():
-    glBegin(GL_LINES)
-    
-    # Вісь X (Червона)
-    glColor3f(1, 0, 0)
-    glVertex3f(-1.0, 0.0, 0.0)
-    glVertex3f(1.0, 0.0, 0.0)
-    
-    # Вісь Y (Зелена)
-    glColor3f(0, 1, 0)
-    glVertex3f(0.0, -1.0, 0.0)
-    glVertex3f(0.0, 1.0, 0.0)
-    
-    # Вісь Z (Синя)
-    glColor3f(0, 0, 1)
-    glVertex3f(0.0, 0.0, -1.0)
-    glVertex3f(0.0, 0.0, 1.0)
-    
-    glEnd()
+def cylindrical_to_cartesian(r, theta):
+    x = r * math.cos(theta)
+    y = r * math.sin(theta)
+    return x, y
 
-# Малюємо коло (примітив)
-def draw_circle(radius):
-    glBegin(GL_LINE_LOOP)
-    num_segments = 100
-    for i in range(num_segments):
-        theta = 2.0 * math.pi * i / num_segments  # кут
-        x = radius * math.cos(theta)
-        y = radius * math.sin(theta)
-        glVertex3f(x, y, 0)
-    glEnd()
+center_x = int(input("Enter the x-coordinate of the center (in pixels): "))
+center_y = int(input("Enter the y-coordinate of the center (in pixels): "))
+radius = int(input("Enter the radius of the circle (in pixels): "))
 
-# Ініціалізація налаштувань OpenGL
-def init_opengl():
-    glClearColor(0.0, 0.0, 0.0, 1.0)  # Встановлення чорного фону
-    glMatrixMode(GL_PROJECTION)       # Переключення на матрицю проекції
-    glLoadIdentity()                  # Скидання матриці проекції
-    gluPerspective(45, (WINDOW_WIDTH / WINDOW_HEIGHT), 0.1, 50.0)  # Встановлення перспективи
-    glMatrixMode(GL_MODELVIEW)        # Повернення до матриці моделі
-    glEnable(GL_DEPTH_TEST)           # Увімкнення тестування глибини
+# Adjust center_x and center_y to match the origin in the bottom-right corner
+center_x = width - center_x
+center_y = height - center_y
 
-# Головний цикл програми
-def main():
-    pygame.init()  # Ініціалізація pygame
-    pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), DOUBLEBUF | OPENGL)  # Створення вікна
-    init_opengl()  # Ініціалізація OpenGL
+# Draw the coordinate axes
+draw_axes()
 
-    # Початкова позиція камери
-    glTranslatef(0.0, 0.0, -5)  # Переміщення камери назад
+# Draw the circle in Cartesian coordinates
+midpoint_circle_algorithm(center_x, center_y, radius)
 
-    # Головний цикл
-    running = True
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:  # Вихід з циклу при закритті вікна
-                running = False
+# Example: Convert the circle's center to cylindrical coordinates and print the result
+r, theta = cartesian_to_cylindrical(center_x - width, center_y - height)
+print(f"Cylindrical coordinates of the center: r = {r}, theta = {theta}")
 
-        # Очищення екрану
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)  # Очищення буферів кольору і глибини
+# Example: Convert back to Cartesian coordinates
+x_cartesian, y_cartesian = cylindrical_to_cartesian(r, theta)
+print(f"Converted back to Cartesian: x = {x_cartesian}, y = {y_cartesian}")
 
-        # Малювання декартової системи координат
-        draw_axes()
+# Save the resulting image as PNG
+image = Image.frombytes('RGBA', (width, height), buffer.tobytes())
+image.save("output/lab2.png")
 
-        # Малювання кола
-        draw_circle(1.0)
-
-        # Оновлення дисплея
-        pygame.display.flip()
-        pygame.time.wait(10)  # Затримка для контролю частоти кадрів
-
-    pygame.quit()  # Завершення pygame
-
-
-if __name__ == "__main__":
-    main()
+osmesa.OSMesaDestroyContext(context)
