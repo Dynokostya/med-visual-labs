@@ -1,0 +1,1 @@
+3D Coordinates of the pixel: [   3.33988  -159.716    -201.035164]
